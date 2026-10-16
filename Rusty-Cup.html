@@ -225,6 +225,94 @@ function renderRules(){$('app').innerHTML=LEAGUE_RULES_HTML;if($('rulesRosters')
 // Rusty Cup v1.9: shared invitations, roster claims, attendance and league chat.
 let member=null,members=[],attendance=[],messages=[],accessConfig=null,communityError='',memberLoaded=false,chatDraft='';
 let memberStop=null,communityStops=[],communityKey='',authGeneration=0;
+let pushSession=null,pushSetupPromise=null,pushBusy=false,pushInfo='',pushAccount=null,pushReadTimer=null,pushLastRead='';
+const pushPreferenceKey=()=> 'rustycup-push-v1';
+function pushSaved(){try{return JSON.parse(localStorage.getItem(pushPreferenceKey())||'null')}catch{return null}}
+function pushTimestamp(message){const t=message.createdAt;if(!t||!Number.isInteger(t.seconds)||!Number.isInteger(t.nanoseconds))return '';return String(t.seconds).padStart(12,'0')+'.'+String(t.nanoseconds).padStart(9,'0')}
+async function pushModules(){
+ if(!pushSetupPromise)pushSetupPromise=(async()=>{
+  const config=(await import(new URL('./rusty-cup-push-config.js',location.href).href)).default;
+  if(!config?.vapidKey||config.vapidKey.startsWith('PASTE_'))throw Error('Push notifications need the one-time Firebase setup.');
+  const [app,functions,messaging]=await Promise.all([import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js'),import('https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js'),import('https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging.js')]);
+  if(!await messaging.isSupported())throw Error('Push is not supported here. On iPhone, open Rusty Cup from its Home Screen icon.');
+  const registration=await navigator.serviceWorker.register(new URL('./rusty-cup-sw.js',location.href).href,{updateViaCache:'none'});
+  await navigator.serviceWorker.ready;
+  const firebaseApp=app.getApp(),service=functions.getFunctions(firebaseApp,config.region||'us-central1');
+  return {config,messaging,registration,instance:messaging.getMessaging(firebaseApp),call:async(name,data)=>(await functions.httpsCallable(service,name)(data)).data};
+ })().catch(error=>{pushSetupPromise=null;throw error});
+ return pushSetupPromise;
+}
+function postPushBadge(state,activate=false){
+ const worker=pushSession?.modules.registration.active;if(worker&&state)worker.postMessage({kind:'RUSTYCUP_BADGE',...state,activate});
+}
+async function connectPush(){
+ const account=uid,modules=await pushModules();
+ if(uid!==account||!leagueMember())throw Error('Sign in to the league again.');
+ const token=await modules.messaging.getToken(modules.instance,{vapidKey:modules.config.vapidKey,serviceWorkerRegistration:modules.registration});
+ const state=await modules.call('rustyCupRegisterPush',{token});
+ if(uid!==account){await modules.messaging.deleteToken(modules.instance);throw Error('Account changed. Enable notifications again.');}
+ pushSession={uid:account,token,deviceId:state.deviceId,modules};pushLastRead='';
+ try{localStorage.setItem(pushPreferenceKey(),JSON.stringify({uid:account,enabled:true}))}catch{}
+ postPushBadge(state,true);
+ pushSession.unsubscribe=modules.messaging.onMessage(modules.instance,payload=>{
+  if(!pushSession||pushSession.uid!==uid)return;
+  postPushBadge(payload.data);
+  const url=new URL(location.href);url.searchParams.set('chat','1');
+  // Background notifications are shown by Firebase. Show foreground alerts here.
+  modules.registration.showNotification(payload.notification?.title||'Rusty Cup · New chat message',{body:payload.notification?.body||'Open Rusty Cup to read the league chat.',icon:new URL('./rusty-cup-notification-icon.png',location.href).href,tag:'rustycup-chat-'+(payload.data?.messageId||''),data:{url:url.href}}).catch(()=>{});
+  syncPushRead();
+ });
+ syncPushRead();return state;
+}
+async function enablePush(){
+ if(!uid||!leagueMember())throw Error('Sign in and join the league first.');
+ if(typeof Notification==='undefined'||!navigator.serviceWorker)throw Error('On iPhone, add Rusty Cup to your Home Screen, then open that icon.');
+ if(/iPhone|iPad|iPod/.test(navigator.userAgent)&&!navigator.standalone&&!window.matchMedia('(display-mode: standalone)').matches)throw Error('Open Rusty Cup from its Home Screen icon to enable notifications.');
+ // Permission must be requested directly from this button click on iPhone.
+ const permission=await Notification.requestPermission();
+ if(permission!=='granted')throw Error('Notifications are not allowed. You can change this in your device notification settings.');
+ return connectPush();
+}
+async function disablePush(){
+ const session=pushSession,saved=pushSaved();
+ clearTimeout(pushReadTimer);
+ let modules=session?.modules;
+ if(!modules&&saved?.enabled)modules=await pushModules();
+ if(modules){
+  modules.registration.active?.postMessage({kind:'RUSTYCUP_BADGE',reset:true});
+  await modules.messaging.deleteToken(modules.instance);
+  session?.unsubscribe?.();
+  if(session)try{await modules.call('rustyCupDisablePush',{deviceId:session.deviceId})}catch{}
+ }
+ pushSession=null;pushLastRead='';
+ try{localStorage.removeItem(pushPreferenceKey())}catch{}
+ if(typeof navigator!=='undefined'&&navigator.clearAppBadge)await navigator.clearAppBadge().catch(()=>{});
+}
+function syncPushRead(){
+ if(!pushSession||pushSession.uid!==uid||view!=='chat'||document.visibilityState==='hidden')return;
+ const ids=messages.map(m=>m.id),through=messages.map(pushTimestamp).filter(Boolean).sort().at(-1)||'',signature=JSON.stringify([pushSession.deviceId,ids,through]);
+ if(signature===pushLastRead)return;
+ clearTimeout(pushReadTimer);pushReadTimer=setTimeout(async()=>{
+  const session=pushSession;if(!session||session.uid!==uid||view!=='chat'||document.visibilityState==='hidden')return;
+  try{const state=await session.modules.call('rustyCupReadPush',{deviceId:session.deviceId,messageIds:ids,through});if(pushSession===session){postPushBadge(state);pushLastRead=signature}}catch{}
+ },300);
+}
+function syncPushSession(){
+ if(typeof navigator==='undefined'||!cloud||!navigator.serviceWorker)return;
+ if(pushSession&&!leagueMember())disablePush().catch(()=>{});
+ if(pushAccount!==uid){if(pushAccount&&pushSession)disablePush().catch(()=>{});pushAccount=uid;}
+ const saved=pushSaved();
+ if(!pushBusy&&!pushSession&&uid&&leagueMember()&&saved?.uid===uid&&saved.enabled&&typeof Notification!=='undefined'&&Notification.permission==='granted'){
+  pushBusy=true;connectPush().catch(error=>{pushInfo=error.message}).finally(()=>{pushBusy=false});
+ }
+ syncPushRead();
+}
+function pushSettingsDialog(){
+ dialog('Chat push notifications','<p>Get an alert and an app-icon badge when someone else posts in league chat. On iPhone, open Rusty Cup from its Home Screen icon.</p><p id="pushStatus" role="status">'+esc(pushSession?'Notifications are enabled on this device.':pushInfo||'Notifications are off on this device.')+'</p><div class="actions"><button class="primary" id="enableChatPush">'+(pushSession?'Refresh notifications':'Enable push notifications')+'</button><button id="disableChatPush">Turn off</button></div>');
+ $('enableChatPush').onclick=async()=>{const button=$('enableChatPush');button.disabled=true;$('pushStatus').textContent='Setting up notifications…';try{if(pushSession)await disablePush();await enablePush();pushInfo='Notifications are enabled on this device.';if($('pushStatus'))$('pushStatus').textContent=pushInfo}catch(error){if($('pushStatus'))$('pushStatus').textContent=error.message||'Could not enable notifications. Complete the Firebase setup and retry.'}finally{button.disabled=false}};
+ $('disableChatPush').onclick=async()=>{try{await disablePush();$('pushStatus').textContent='Notifications are off on this device.'}catch{$('pushStatus').textContent='Could not turn notifications off. Retry or use your device notification settings.'}};
+}
+
 // Read receipts stay on this device, separately for each signed-in account.
 let chatReadAccount='',chatReadState=null;
 function chatReadKey(){return 'rusty-cup-chat-read-v1:'+uid}
@@ -254,6 +342,7 @@ function chatUnreadCount(){
  return messages.filter(m=>m.uid!==uid&&!seen.has(m.id)).length;
 }
 function refreshChatBadge(){
+ syncPushRead();
  if(cloud&&ready&&leagueMember()&&view==='chat'&&!openGameId&&document.visibilityState!=='hidden')rememberChatMessages(messages);
  const count=chatUnreadCount();
  document.querySelectorAll('[data-view="chat"]').forEach(button=>{
@@ -298,9 +387,9 @@ render=function(){
  const focus=document.activeElement?.id,selection=focus==='chatText'?document.activeElement.selectionStart:null;
  const accountInputs=view==='account'?['managedCode','leagueCode','rosterName'].filter(key=>$(key)?.dataset.userEdited==='true').map(key=>[key,$(key).value]):[];
  communityRender();
- if(cloud){$('mode').innerHTML='<strong>Shared league</strong> · '+(editable?(rootCommissioner()?'Commissioner · Owner':leagueCommissioner()?'Commissioner':'Admin'):member?'Player · '+esc(myPlayer()?.name||'Roster member'):'League viewer');$('authControls').innerHTML='<button id="accountButton">'+(uid?'My account':'Join / sign in')+'</button>'+(uid?'<button id="signOutButton">Sign out</button>':'');$('accountButton').onclick=()=>{openGameId=null;view='account';render()};if($('signOutButton'))$('signOutButton').onclick=()=>api.signOut(auth).catch(()=>toast('Could not sign out.'));}
+ if(cloud){$('mode').innerHTML='<strong>Shared league</strong> · '+(editable?(rootCommissioner()?'Commissioner · Owner':leagueCommissioner()?'Commissioner':'Admin'):member?'Player · '+esc(myPlayer()?.name||'Roster member'):'League viewer');$('authControls').innerHTML='<button id="accountButton">'+(uid?'My account':'Join / sign in')+'</button>'+(uid?'<button id="signOutButton">Sign out</button>':'');$('accountButton').onclick=()=>{openGameId=null;view='account';render()};if($('signOutButton'))$('signOutButton').onclick=async()=>{try{await disablePush();await api.signOut(auth)}catch{toast('Could not sign out. Please retry.')}};}
  if(ready&&view==='account')renderAccount();if(ready&&view==='chat')renderChat();
- refreshChatBadge();
+ refreshChatBadge();syncPushSession();
  if(ready&&openGameId){const g=league.games.find(x=>x.id===openGameId);if(g){const box=document.createElement('section');box.className='card';box.innerHTML=attendanceMarkup(g,true);$('app').appendChild(box);}}
  document.querySelectorAll('[data-rsvp]').forEach(b=>b.onclick=()=>submitRsvp(b.dataset.game,b.dataset.rsvp));
  document.querySelectorAll('[data-attendance]').forEach(b=>b.onclick=()=>attendanceDialog(b.dataset.attendance));
@@ -354,11 +443,12 @@ async function changeRole(target,role){
 
 function renderChat(){
  if(!cloud||!leagueMember()){$('app').innerHTML='<section class="card"><h2>League chat</h2>'+memberGate()+'</section>';return}
- $('app').innerHTML='<section class="card"><div class="row wrap"><h2>League chat</h2><span class="badge">League members</span></div>'+(communityError?'<p class="notice">'+esc(communityError)+'</p>':'')+'<p class="muted">Latest 100 messages · visible to league members.</p><div class="chatMessages" id="chatMessages">'+(messages.map(m=>'<article class="chatMessage"><div class="row"><strong>'+esc(m.displayName)+'</strong><span class="muted">'+esc(m.createdAt?.toDate?m.createdAt.toDate().toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'Sending…')+'</span></div><p>'+esc(m.text)+'</p>'+((editable||m.uid===uid)?'<button class="smallbtn danger" data-delete-message="'+esc(m.id)+'">Remove</button>':'')+'</article>').join('')||'<p class="empty">Start the league conversation.</p>')+'</div><form id="chatForm"><label for="chatText">Message</label><textarea id="chatText" maxlength="1000" rows="3" required placeholder="Message the league…">'+esc(chatDraft)+'</textarea><div class="row spaced"><span class="muted">Up to 1,000 characters</span><button class="primary">Send</button></div><p id="chatError" role="alert" class="status"></p></form></section>';
- $('chatText').oninput=e=>chatDraft=e.target.value;$('chatMessages').scrollTop=$('chatMessages').scrollHeight;
+ $('app').innerHTML='<section class="card"><div class="row wrap"><h2>League chat</h2><span class="badge">League members</span></div><p><button id="chatPushSettings">Chat notifications</button></p>'+(communityError?'<p class="notice">'+esc(communityError)+'</p>':'')+'<p class="muted">Latest 100 messages · visible to league members.</p><div class="chatMessages" id="chatMessages">'+(messages.map(m=>'<article class="chatMessage"><div class="row"><strong>'+esc(m.displayName)+'</strong><span class="muted">'+esc(m.createdAt?.toDate?m.createdAt.toDate().toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'Sending…')+'</span></div><p>'+esc(m.text)+'</p>'+((editable||m.uid===uid)?'<button class="smallbtn danger" data-delete-message="'+esc(m.id)+'">Remove</button>':'')+'</article>').join('')||'<p class="empty">Start the league conversation.</p>')+'</div><form id="chatForm"><label for="chatText">Message</label><textarea id="chatText" maxlength="1000" rows="3" required placeholder="Message the league…">'+esc(chatDraft)+'</textarea><div class="row spaced"><span class="muted">Up to 1,000 characters</span><button class="primary">Send</button></div><p id="chatError" role="alert" class="status"></p></form></section>';
+ $('chatPushSettings').onclick=()=>pushSettingsDialog(); $('chatText').oninput=e=>chatDraft=e.target.value;$('chatMessages').scrollTop=$('chatMessages').scrollHeight;
  $('chatForm').onsubmit=async e=>{e.preventDefault();const text=chatDraft.trim();if(!text)return;const button=e.submitter;button.disabled=true;try{await api.setDoc(communityRef('messages',id()),{uid,displayName:myPlayer()?.name||'Commissioner',text,createdAt:api.serverTimestamp()});chatDraft='';render()}catch{if($('chatError'))$('chatError').textContent='Message could not be sent. Check your connection and membership.'}finally{button.disabled=false}};
  document.querySelectorAll('[data-delete-message]').forEach(b=>b.onclick=async()=>{if(!confirm('Remove this message from league chat?'))return;try{await api.deleteDoc(communityRef('messages',b.dataset.deleteMessage))}catch{toast('Could not remove the message.')}});
 }
 
+if(typeof location!=='undefined'&&new URL(location.href).searchParams.get('chat')==='1')view='chat';
 init();
 </script></body></html>
