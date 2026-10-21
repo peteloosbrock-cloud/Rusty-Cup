@@ -135,6 +135,39 @@ function gameSummaryData(g,s=league){
  const time=g.time?new Date(g.date+'T'+g.time).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):'';
  return {date,location:(g.location||'Rink TBD')+(time?' - '+time:''),season:year+'–'+(year+1),goals,goalies:['green','white'].map(team=>({team:TEAM_NAMES[team],name:g.goalies?.[team]?name(g.goalies[team]):'Not assigned',against:Number(team==='green'?g.white:g.green)})),hasLog:Array.isArray(g.events)};
 }
+const RUSTY_CUP_STORY_NOTES={
+ filruzzi:{scored:['Fil finally crossed the red line, scored, and immediately submitted a request to review everyone else’s shift.'],any:['Fil kept the red line in view and the blame department fully staffed.']},
+ eriknilsen:{scored:['Erik found the five-hole again; the high corners are still waiting for an introduction.'],any:['Erik’s motor stayed in playoff mode, giving the rest of the bench something to tease him about.']},
+ scottmack:{any:['Scott was involved, so the league office may review the result before it becomes official.']},
+ patdow:{scored:['Pat got the goal before the chips and queso order went in. Efficient work.'],any:['Pat had another grade-A look; the finishing department is still reviewing its conversion rate.']},
+ peteloosbrock:{scored:['Pete supplied a hard finish and, as usual, made the good play look completely intentional.'],any:['Pete mixed a sharp pass with one adventurous decision; the defensive end remains a developing area.']},
+ billyanderson:{any:['Billy kept the offense on track. The railroad experience may be paying off.']},
+ tombuckley:{scored:['Tom celebrated like his evening plans just got upgraded.'],any:['Tom’s straight-line speed made the rink feel shorter than it looked from the bench.']},
+ jakepatricka:{any:['Jake’s stick covered enough ice to qualify as an extra teammate—and the baseball instincts still show.']},
+ nealhansen:{any:['Neal appeared to be cruising at three-quarter speed; the other quarter remains classified.']},
+ jonguba:{scored:['Jon scored a highlight goal and surprised everyone, including the people who had just watched him flatten a lane.'],any:['Jon brought the usual collision-course energy in that Eden Prairie jersey.']},
+ brianfisher:{any:['Brian is back in the lineup, and the league is treating that as a renewal worth celebrating.']},
+ ryanarchambault:{any:['Ryan brought the hard work and freight-train routes; everyone nearby remembered to keep their heads up.']},
+ jimmyneymeyer:{goalie:['Jimmy counted his saves in his head and announced enough of them for the whole bench.'],any:['Jimmy kept the crease organized and the teammates informed, loudly.']},
+ mattkrey:{goalie:['Matt handled the goalie work and still looked like he might hop over the boards for a shift.'],any:['Matt’s old skater instincts are never far from the crease.']},
+ joeyjech:{any:['Joey kept score and announced each goal with the authority of gym-class attendance.']},
+ dereksimonson:{any:['Derek reminded the league that experience still comes with very good hands.']},
+ brianbowman:{any:['Brian played a solid game and found time for a well-timed chirp from the home-improvement department.']},
+ darekpugh:{any:['Darek kept things quiet; his shift did the talking.']},
+ benliverca:{any:['Ben’s hands were doing things the rest of us will claim we meant to try.']},
+ nateanhorn:{any:['Nate brought the kind of clinical precision you’d expect from someone in the medical field.']},
+ patsarazine:{scored:['Pat turned another scoring chance into a reminder that the finishing department is still accepting applications.'],any:['Pat created chances with smart, fast play; the final touch is still a work in progress.']},
+ naterost:{any:['Nate Rost brought the kind of strength that makes the corners feel smaller.']},
+ nickrost:{any:['Nick Rost brought the kind of strength that makes the corners feel smaller.']}
+};
+function storyPlayerQuip(player,g,stats,featuredIds,s=league){
+ const key=(player.name||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+ if(key==='peteloosbrock'&&s.players.some(p=>p.id!==player.id&&(p.name||'').toLowerCase().replace(/[^a-z0-9]/g,'')==='filruzzi'&&featuredIds.has(p.id)))return 'Pete and Fil kept up their friendly rivalry: one supplied the play, the other supplied the commentary.';
+ const notes=RUSTY_CUP_STORY_NOTES[key];if(!notes)return '';
+ const kind=position(player)==='goalie'?'goalie':stats.goals?'scored':stats.assists?'assisted':'any',choices=notes[kind]||notes.any||[];if(!choices.length)return '';
+ const seed=String(g.id||g.date||'').split('').reduce((n,c)=>((n*31)+c.charCodeAt(0))>>>0,0);
+ return choices[seed%choices.length];
+}
 function gameRecapData(g,s=league){
  const name=pid=>s.players.find(p=>p.id===pid)?.name||'Unknown player',stats=new Map(),events=Array.isArray(g.events)?g.events:[];
  const credit=(pid,key,n=1)=>{if(!pid)return;const row=stats.get(pid)||{goals:0,assists:0};row[key]+=Number(n||0);stats.set(pid,row)};
@@ -151,6 +184,8 @@ function gameRecapData(g,s=league){
  if(helpers.length){const p=helpers[0];if(p.assists>=2)lines.push(p.name+' handed out '+p.assists+' assists, proving that passing is still possible after the lungs file a complaint.')}
  if(!scorers.length)lines.push('No individual scorers were recorded, so the official story credits hard work, good teamwork, and a scorekeeper who may have been thinking about the first beverage.');
  if(g.mvpPlayer)lines.push('Game MVP: '+name(g.mvpPlayer)+'. The honor is official; the acceptance speech can wait until everyone gets their gloves off.');
+ const featuredIds=new Set([scorers[0]?.id,helpers[0]?.assists>=2?helpers[0].id:'',g.mvpPlayer,events[0]?.scorer,events[events.length-1]?.scorer].filter(Boolean));
+ let quipCount=0;for(const pid of featuredIds){const player=s.players.find(p=>p.id===pid);if(!player)continue;const quip=storyPlayerQuip(player,g,stats.get(pid)||{goals:0,assists:0},featuredIds,s);if(quip){lines.push(quip);if(++quipCount>=2)break}}
  lines.push('Final report: the goals are in the books, the legs are negotiating, and somebody is already explaining how that last shift was supposed to go.');
  const highlights=[];
  if(events.length){const first=events[0],last=events[events.length-1];highlights.push('First on the board: '+(first.scorer?name(first.scorer):'an unassigned scorer')+' for '+(first.team==='green'?'Green Team':'White Team')+'.');if(events.length>1)highlights.push('Last goal recorded: '+(last.scorer?name(last.scorer):'an unassigned scorer')+' for '+(last.team==='green'?'Green Team':'White Team')+'.')}
