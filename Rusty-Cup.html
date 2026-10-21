@@ -148,6 +148,7 @@ const RUSTY_CUP_STORY_NOTES={
  jonguba:{scored:['Jon scored a highlight goal and surprised everyone, including the people who had just watched him flatten a lane.'],any:['Jon brought the usual collision-course energy in that Eden Prairie jersey.']},
  brianfisher:{any:['Brian is back in the lineup, and the league is treating that as a renewal worth celebrating.']},
  ryanarchambault:{any:['Ryan brought the hard work and freight-train routes; everyone nearby remembered to keep their heads up.']},
+ ryanhutchins:{scored:['Ryan threaded a tape-to-tape pass through traffic, then chirped the bench like he had just served lunch from the food truck.'],assisted:['Ryan dealt a crisp assist from the half-wall; the food-truck owner knows how to deliver.'],any:['Ryan moved the puck like a food-truck lunch rush: quick hands, clean distribution, and a chirp for anyone caught standing still.']},
  jimmyneymeyer:{goalie:['Jimmy counted his saves in his head and announced enough of them for the whole bench.'],any:['Jimmy kept the crease organized and the teammates informed, loudly.']},
  mattkrey:{goalie:['Matt handled the goalie work and still looked like he might hop over the boards for a shift.'],any:['Matt’s old skater instincts are never far from the crease.']},
  joeyjech:{any:['Joey kept score and announced each goal with the authority of gym-class attendance.']},
@@ -180,13 +181,18 @@ function gameRecapData(g,s=league){
  const scoreText='Green Team '+green+'–'+white+' White Team';
  let opener=tie?'Neither team won, so both benches get to tell the story like they almost had it.':margin===1?'A one-goal finish left no room for a leisurely change—or a leisurely trip to the bench.':margin>=4?'The scoreboard opened up, and the losing side spent the third period searching for the missing legs.':'The teams traded momentum, goals, and at least one look toward the clock.';
  let lines=[tie?'Green and White finished level at '+green+'–'+white+'.':winner+' won '+(green>white?green+'–'+white:white+'–'+green)+' against '+(green>white?'White Team':'Green Team')+'.',opener];
+ lines.push(tie?'The Green–White rivalry stays deadlocked, and both benches are already filing verbal appeals.':'In the Green–White rivalry, '+(green>white?'Green':'White')+' claims the bragging rights; the other bench is calling it a fluke and demanding a rematch.');
  if(scorers.length){const p=scorers[0];lines.push(p.goals>=3?p.name+' buried '+p.goals+' goals and earned the unofficial right to pick the postgame playlist.':p.goals>=2?p.name+' scored twice, which is one more finish than most of us managed on our shifts.':p.name+' led the scoring with '+p.goals+' goal'+(p.goals===1?'':'s')+'.')}
  if(helpers.length){const p=helpers[0];if(p.assists>=2)lines.push(p.name+' handed out '+p.assists+' assists, proving that passing is still possible after the lungs file a complaint.')}
  if(!scorers.length)lines.push('No individual scorers were recorded, so the official story credits hard work, good teamwork, and a scorekeeper who may have been thinking about the first beverage.');
  if(g.mvpPlayer)lines.push('Game MVP: '+name(g.mvpPlayer)+'. The honor is official; the acceptance speech can wait until everyone gets their gloves off.');
+ const teamPlayers=team=>s.players.filter(p=>p.active!==false&&p.team===team&&position(p)!=='goalie');
+ const greenRoster=teamPlayers('green'),whiteRoster=teamPlayers('white');
+ if(greenRoster.length&&whiteRoster.length){let seed=String(g.id||g.date||'rivalry').split('').reduce((n,c)=>((n*31)+c.charCodeAt(0))>>>0,0);seed=(seed*1664525+1013904223)>>>0;const gp=greenRoster[seed%greenRoster.length];seed=(seed*1664525+1013904223)>>>0;const wp=whiteRoster[seed%whiteRoster.length];lines.push('Heated Rivalry watch: '+gp.name+' and '+wp.name+' were exchanging looks from opposite benches like the cameras were rolling—no points required, just premium chirps and dramatic line changes.');}
+ lines.push('The teams head to Applebee’s for postgame beers and appetizers. The MVP gets the giant sugary, fruity drink—and league tradition says they have to drink it.');
  const featuredIds=new Set([scorers[0]?.id,helpers[0]?.assists>=2?helpers[0].id:'',g.mvpPlayer,events[0]?.scorer,events[events.length-1]?.scorer].filter(Boolean));
  let quipCount=0;for(const pid of featuredIds){const player=s.players.find(p=>p.id===pid);if(!player)continue;const quip=storyPlayerQuip(player,g,stats.get(pid)||{goals:0,assists:0},featuredIds,s);if(quip){lines.push(quip);if(++quipCount>=2)break}}
- lines.push('Final report: the goals are in the books, the legs are negotiating, and somebody is already explaining how that last shift was supposed to go.');
+ lines.push('Final report: the goals are in the books, the legs are negotiating, and somebody is already explaining how that last shift was supposed to go. Green and White will be back at it next skate, each convinced the other side got away with something.');
  const highlights=[];
  if(events.length){const first=events[0],last=events[events.length-1];highlights.push('First on the board: '+(first.scorer?name(first.scorer):'an unassigned scorer')+' for '+(first.team==='green'?'Green Team':'White Team')+'.');if(events.length>1)highlights.push('Last goal recorded: '+(last.scorer?name(last.scorer):'an unassigned scorer')+' for '+(last.team==='green'?'Green Team':'White Team')+'.')}
  if(scorers[0]?.goals>=1)highlights.push('Top finisher: '+scorers[0].name+' with '+scorers[0].goals+' goal'+(scorers[0].goals===1?'':'s')+'.');
